@@ -1,7 +1,28 @@
-## dbt-spark
+<p align="center">
+  <img src="/etc/dbt-logo-full.svg" alt="dbt logo" width="500"/>
+</p>
+<p align="center">
+  <a href="https://circleci.com/gh/fishtown-analytics/dbt-spark/tree/master">
+    <img src="https://circleci.com/gh/fishtown-analytics/dbt-spark/tree/master.svg?style=svg" alt="CircleCI" />
+  </a>
+  <a href="https://community.getdbt.com">
+    <img src="https://community.getdbt.com/badge.svg" alt="Slack" />
+  </a>
+</p>
+
+# dbt-spark
+
+This plugin ports [dbt](https://getdbt.com) functionality to Spark. It supports
+running dbt against Spark clusters that are hosted via Databricks (AWS + Azure),
+Amazon EMR, or Docker.
+
+We have not tested extensively against older versions of Apache Spark. The
+plugin uses syntax that requires version 2.2.0 or newer.
 
 ### Documentation
-For more information on using Spark with dbt, consult the [dbt documentation](https://docs.getdbt.com/docs/profile-spark).
+For more information on using Spark with dbt, consult the dbt documentation:
+- [Spark profile](https://docs.getdbt.com/docs/profile-spark)
+- [Spark specific configs](https://docs.getdbt.com/docs/spark-configs)
 
 ### Installation
 This plugin can be installed via pip:
@@ -36,17 +57,11 @@ A dbt profile can be configured to run against Spark using the following configu
 
 AWS and Azure Databricks have differences in their connections, likely due to differences in how their URLs are generated between the two services.
 
-To connect to an Azure Databricks cluster, you will need to obtain your organization ID, which is a unique ID Azure Databricks generates for each customer workspace.  To find the organization ID, see https://docs.microsoft.com/en-us/azure/databricks/dev-tools/databricks-connect#step-2-configure-connection-properties.  When connecting to Azure Databricks, the organization tag is required to be set in the profiles.yml connection file, as it will be defaulted to 0 otherwise, and will not connect to Azure.  This connection method follows the databricks-connect package's semantics for connecting to Databricks.
+**Organization:** To connect to an Azure Databricks cluster, you will need to obtain your organization ID, which is a unique ID Azure Databricks generates for each customer workspace.  To find the organization ID, see https://docs.microsoft.com/en-us/azure/databricks/dev-tools/databricks-connect#step-2-configure-connection-properties. This is a string field; if there is a leading zero, be sure to include it.
 
-Of special note is the fact that organization ID is treated as a string by dbt-spark, as opposed to a large number. While all examples to date have contained numeric digits, it is unknown how long that may continue, and what the upper limit of this number is.  If you do have a leading zero, please include it in the organization tag and dbt-spark will pass that along.
+**Port:** Please ignore all references to port 15001 in the databricks-connect docs as that is specific to that tool; port 443 is used for dbt-spark's https connection.
 
-dbt-spark has also been tested against AWS Databricks, and it has some differences in the URLs used. It appears to default the positional value where organization lives in AWS connection URLs to 0, so dbt-spark does the same for AWS connections (i.e. simply leave organization-id out when connecting to the AWS version and dbt-spark will construct the correct AWS URL for you).  Note the missing reference to organization here: https://docs.databricks.com/dev-tools/databricks-connect.html#step-2-configure-connection-properties.
-
-Please ignore all references to port 15001 in the databricks-connect docs as that is specific to that tool; port 443 is used for dbt-spark's https connection.
-
-Lastly, the host field for Databricks can be found at the start of your workspace or cluster url (but don't include https://): region.azuredatabricks.net for Azure, or account.cloud.databricks.com for AWS.  
-
-
+**Host:** The host field for Databricks can be found at the start of your workspace or cluster url: `region.azuredatabricks.net` for Azure, or `account.cloud.databricks.com` for AWS. Do not include `https://`.
 
 **Usage with Amazon EMR**
 
@@ -55,7 +70,7 @@ To connect to Spark running on an Amazon EMR cluster, you will need to run `sudo
 
 **Example profiles.yml entries:**
 
-**http, e.g. AWS Databricks**
+**http, e.g. Databricks**
 ```
 your_profile_name:
   target: dev
@@ -65,26 +80,9 @@ your_profile_name:
       type: spark
       schema: analytics
       host: yourorg.sparkhost.com
+      organization: 1234567891234567    # Azure Databricks ONLY
       port: 443
       token: abc123
-      cluster: 01234-23423-coffeetime
-      connect_retries: 5
-      connect_timeout: 60
-```
-
-**Azure Databricks, via http**
-```
-your_profile_name:
-  target: dev
-  outputs:
-    dev:
-      method: http
-      type: spark
-      schema: analytics
-      host: yourorg.sparkhost.com
-      port: 443
-      token: abc123
-      organization: 1234567891234567
       cluster: 01234-23423-coffeetime
       connect_retries: 5
       connect_timeout: 60
@@ -117,16 +115,19 @@ The following configurations can be supplied to models run with the dbt-spark pl
 
 | Option  | Description                                        | Required?               | Example                  |
 |---------|----------------------------------------------------|-------------------------|--------------------------|
-| file_format  | The file format to use when creating tables | Optional                | `parquet`              |
-
+| file_format | The file format to use when creating tables (`parquet`, `delta`, `csv`, `json`, `text`, `jdbc`, `orc`, `hive` or `libsvm`). | Optional | `parquet`|
+| location_root  | The created table uses the specified directory to store its data. The table alias is appended to it. | Optional                | `/mnt/root`              |
+| partition_by  | Partition the created table by the specified columns. A directory is created for each partition. | Optional                | `partition_1`              |
+| clustered_by  | Each partition in the created table will be split into a fixed number of buckets by the specified columns. | Optional               | `cluster_1`              |
+| buckets  | The number of buckets to create while clustering | Required if `clustered_by` is specified                | `8`              |
+| incremental_strategy | The strategy to use for incremental models (`insert_overwrite` or `merge`). Note `merge` requires `file_format` = `delta` and `unique_key` to be specified. | Optional (default: `insert_overwrite`) | `merge` |
+| persist_docs | Whether dbt should include the model description as a table `comment` | Optional | `{'relation': true}` |
 
 
 **Incremental Models**
 
-Spark does not natively support `delete`, `update`, or `merge` statements. As such, [incremental models](https://docs.getdbt.com/docs/configuring-incremental-models)
-are implemented differently than usual in this plugin. To use incremental models, specify a `partition_by` clause in your model config.
-dbt will use an `insert overwrite` query to overwrite the partitions included in your query. Be sure to re-select _all_ of the relevant
-data for a partition when using incremental models.
+To use incremental models, specify a `partition_by` clause in your model config. The default incremental strategy used is `insert_overwrite`, which will overwrite the partitions included in your query. Be sure to re-select _all_ of the relevant
+data for a partition when using the `insert_overwrite` strategy.
 
 ```
 {{ config(
@@ -147,6 +148,61 @@ select
 from {{ ref('events') }}
 where date_day::date >= '2019-01-01'
 group by 1
+```
+
+The `merge` strategy is only supported when using file_format `delta` (supported in Databricks). It also requires you to specify a `unique key` to match existing records.
+
+```
+{{ config(
+    materialized='incremental',
+    incremental_strategy='merge',
+    partition_by=['date_day'],
+    file_format='delta'
+) }}
+
+select *
+from {{ ref('events') }}
+{% if is_incremental() %}
+  where date_day > (select max(date_day) from {{ this }})
+{% endif %}
+```
+
+### Running locally
+
+A `docker-compose` environment starts a Spark Thrift server and a Postgres database as a Hive Metastore backend.
+
+```
+docker-compose up
+```
+
+Your profile should look like this:
+
+```
+your_profile_name:
+  target: local
+  outputs:
+    local:
+      method: thrift
+      type: spark
+      schema: analytics
+      host: 127.0.0.1
+      port: 10000
+      user: dbt
+      connect_retries: 5
+      connect_timeout: 60
+```
+
+Connecting to the local spark instance:
+
+* The Spark UI should be available at [http://localhost:4040/sqlserver/](http://localhost:4040/sqlserver/)
+* The endpoint for SQL-based testing is at `http://localhost:10000` and can be referenced with the Hive or Spark JDBC drivers using connection string `jdbc:hive2://localhost:10000` and default credentials `dbt`:`dbt`
+
+Note that the Hive metastore data is persisted under `./.hive-metastore/`, and the Spark-produced data under `./.spark-warehouse/`. To completely reset you environment run the following:
+
+```
+docker-compose down
+rm -rf ./.hive-metastore/
+rm -rf ./.spark-warehouse/
 ```
 
 ### Reporting bugs and contributing code

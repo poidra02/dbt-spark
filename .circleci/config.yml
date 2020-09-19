@@ -1,29 +1,62 @@
-version: 2
+version: 2.1
+
 jobs:
   unit:
+    environment:
+      DBT_INVOCATION_ENV: circle
     docker:
-      - image: fishtownjacob/test-container
+      - image: fishtownanalytics/test-container:9
     steps:
       - checkout
       - run: tox -e flake8,unit
 
-  integration:
+  integration-spark-thrift:
+    environment:
+      DBT_INVOCATION_ENV: circle
     docker:
-      - image: fishtownjacob/test-container
+      - image: fishtownanalytics/test-container:9
+      - image: godatadriven/spark:2
+        environment:
+          WAIT_FOR: localhost:5432
+        command: >
+          --class org.apache.spark.sql.hive.thriftserver.HiveThriftServer2
+          --name Thrift JDBC/ODBC Server
+          --conf spark.hadoop.javax.jdo.option.ConnectionURL=jdbc:postgresql://localhost/metastore
+          --conf spark.hadoop.javax.jdo.option.ConnectionUserName=dbt
+          --conf spark.hadoop.javax.jdo.option.ConnectionPassword=dbt
+          --conf spark.hadoop.javax.jdo.option.ConnectionDriverName=org.postgresql.Driver
+
+      - image: postgres:9.6.17-alpine
+        environment:
+          POSTGRES_USER: dbt
+          POSTGRES_PASSWORD: dbt
+          POSTGRES_DB: metastore
+
     steps:
       - checkout
 
       - run:
-          name: Checkout test project
-          command: git clone --branch spark-support https://github.com/fishtown-analytics/dbt-integration-tests.git
+          name: Wait for Spark-Thrift
+          command: dockerize -wait tcp://localhost:10000 -timeout 15m -wait-retry-interval 5s
 
       - run:
           name: Run integration tests
-          command: tox -e integration
+          command: tox -e integration-spark-thrift
           no_output_timeout: 1h
-          environment:
-              DBT_PROFILES_DIR: /home/dbt_test_user/project/test/integration/
+      - store_artifacts:
+          path: ./logs
 
+  integration-spark-databricks:
+    environment:
+      DBT_INVOCATION_ENV: circle
+    docker:
+      - image: fishtownanalytics/test-container:9
+    steps:
+      - checkout
+      - run:
+          name: Run integration tests
+          command: tox -e integration-spark-databricks
+          no_output_timeout: 1h
       - store_artifacts:
           path: ./logs
 
@@ -32,6 +65,9 @@ workflows:
   test-everything:
     jobs:
       - unit
-      - integration:
+      - integration-spark-thrift:
+          requires:
+            - unit
+      - integration-spark-databricks:
           requires:
             - unit

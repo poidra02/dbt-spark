@@ -1,47 +1,37 @@
-from dbt.adapters.base.relation import BaseRelation
+from dataclasses import dataclass
+
+from dbt.adapters.base.relation import BaseRelation, Policy
+from dbt.exceptions import RuntimeException
 
 
+@dataclass
+class SparkQuotePolicy(Policy):
+    database: bool = False
+    schema: bool = False
+    identifier: bool = False
+
+
+@dataclass
+class SparkIncludePolicy(Policy):
+    database: bool = False
+    schema: bool = True
+    identifier: bool = True
+
+
+@dataclass(frozen=True, eq=False, repr=False)
 class SparkRelation(BaseRelation):
-    DEFAULTS = {
-        'metadata': {
-            'type': 'SparkRelation'
-        },
-        'quote_character': '`',
-        'quote_policy': {
-            'database': False,
-            'schema': False,
-            'identifier': False,
-        },
-        'include_policy': {
-            'database': False,
-            'schema': True,
-            'identifier': True,
-        },
-        'dbt_created': False,
+    quote_policy: SparkQuotePolicy = SparkQuotePolicy()
+    include_policy: SparkIncludePolicy = SparkIncludePolicy()
+    quote_character: str = '`'
 
-    }
+    def __post_init__(self):
+        if self.database != self.schema and self.database:
+            raise RuntimeException('Cannot set database in spark!')
 
-    SCHEMA = {
-        'type': 'object',
-        'properties': {
-            'metadata': {
-                'type': 'object',
-                'properties': {
-                    'type': {
-                        'type': 'string',
-                        'const': 'SparkRelation',
-                    },
-                },
-            },
-            'type': {
-                'enum': BaseRelation.RelationTypes + [None]
-            },
-            'path': BaseRelation.PATH_SCHEMA,
-            'include_policy': BaseRelation.POLICY_SCHEMA,
-            'quote_policy': BaseRelation.POLICY_SCHEMA,
-            'quote_character': {'type': 'string'},
-            'dbt_created': {'type': 'boolean'},
-        },
-        'required': ['metadata', 'type', 'path', 'include_policy',
-                     'quote_policy', 'quote_character', 'dbt_created']
-    }
+    def render(self):
+        if self.include_policy.database and self.include_policy.schema:
+            raise RuntimeException(
+                'Got a spark relation with schema and database set to '
+                'include, but only one can be set'
+            )
+        return super().render()
